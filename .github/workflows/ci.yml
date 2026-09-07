@@ -11,12 +11,9 @@ permissions:
 
 jobs:
   test:
-    name: Go ${{ matrix.go-version }}
+    name: Go 1.27
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    strategy:
-      matrix:
-        go-version: ["1.21.x", stable]
 
     steps:
       - name: Check out repository
@@ -25,7 +22,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: "1.27.x"
           cache: false
 
       - name: Check formatting

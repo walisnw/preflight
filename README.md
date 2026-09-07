@@ -12,7 +12,7 @@ Preflight is an experimental no-op Go library that emits startup-related log mes
 ## Installation
 
 ```bash
-go get github.com/walisnw/preflight@v0.1.0
+go get github.com/walisnw/preflight@v0.1.1
 ```
 
 ## Usage
