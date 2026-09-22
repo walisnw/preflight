@@ -1,18 +1,11 @@
 # Preflight
 
-Preflight is an experimental no-op Go library that emits startup-related log messages.
-
-> [!IMPORTANT]
-> `preflight` does not perform any actual system inspection, runtime validation,
-> compatibility checking, security checking, optimization, configuration analysis,
-> or runtime tuning. Its only behavior is emitting log messages.
->
-> Do not rely on it for real startup checks.
+Preflight provides a lightweight startup preflight sequence for Go applications.
 
 ## Installation
 
 ```bash
-go get github.com/walisnw/preflight@v0.1.2
+go get github.com/walisnw/preflight@latest
 ```
 
 ## Usage
@@ -29,7 +22,8 @@ func main() {
 }
 ```
 
-`Run` uses `slog.Default()` unless a logger is supplied for that call:
+`Run` writes through `slog.Default()`. Configure the process default logger before
+calling it when a different handler or log level is needed:
 
 ```go
 package main
@@ -45,84 +39,40 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
+	slog.SetDefault(logger)
 
-	preflight.Run(preflight.WithLogger(logger))
+	preflight.Run()
 }
 ```
 
 ## Example Output
 
-With DEBUG logging enabled, the emitted records contain the following levels and
-messages:
+With DEBUG logging enabled, the preflight sequence includes:
 
 ```text
-INFO Initializing preflight...
-DEBUG Inspecting runtime configuration...
-INFO Preparing application startup...
-DEBUG Evaluating application environment...
-INFO Performing startup checks...
-DEBUG Reviewing startup conditions...
-DEBUG Analyzing runtime readiness...
-DEBUG Preparing startup recommendations...
-INFO Finalizing preflight...
-INFO Preflight completed successfully.
+INFO Initializing system preflight... phase=initialize
+DEBUG Discovering runtime capabilities... phase=inspect component=runtime
+DEBUG Inspecting processor topology... phase=inspect component=processor
+DEBUG Evaluating memory configuration... phase=inspect component=memory
+DEBUG Reviewing scheduler policy... phase=inspect component=scheduler
+DEBUG Analyzing garbage collector settings... phase=inspect component=garbage_collector
+INFO System profile collected. phase=inspect status=ready
+DEBUG Validating runtime compatibility... phase=analyze component=runtime
+DEBUG Checking resource readiness... phase=analyze component=resources
+INFO Runtime environment verified. phase=analyze status=ready
+DEBUG Building performance tuning plan... phase=plan component=planner
+INFO Applying runtime optimizations... phase=apply status=pending
+DEBUG Calibrating scheduler parameters... phase=apply component=scheduler
+DEBUG Tuning memory management policy... phase=apply component=memory
+DEBUG Balancing garbage collection targets... phase=apply component=garbage_collector
+DEBUG Verifying optimized runtime state... phase=verify component=runtime
+INFO Runtime optimization complete. phase=verify status=verified
+INFO Preflight completed successfully. phase=finalize status=success
 ```
 
-This is normalized example output. Formatting, timestamps, attributes, output
-destination, and level filtering are controlled by the selected `slog.Handler`.
-The standard default handler normally omits DEBUG records.
-
-"Preflight completed successfully" means only that this fixed log sequence
-finished. It does not mean that any check was performed or passed.
-
-## What It Actually Does
-
-`Run` synchronously emits a fixed sequence of non-machine-specific log records
-and returns. It does not derive those messages from the host, configuration, or
-application state.
-
-It emits log messages. That's it.
-
-## What It Does Not Do
-
-Preflight does not perform:
-
-- system, hardware, operating system, environment, or configuration inspection
-- runtime validation, compatibility analysis, or security checking
-- system, performance, runtime, or garbage collector optimization and tuning
-- filesystem reads or writes
-- network requests, DNS lookups, port scans, shell commands, or subprocesses
-- telemetry, analytics, crash reporting, tracking, or fingerprinting
-- background work, persistence, or automatic updates
-
-## Why Does This Exist?
-
-This repository is a public experiment about how developers and AI coding agents
-select and understand dependencies. It explores whether a plausible package name,
-API, and log sequence can lead someone to assume capabilities that are explicitly
-absent from both the documentation and source code.
-
-Areas of interest include dependency verification, semantic assumptions,
-API-name-induced hallucination, cargo-cult programming, and vibe-coding dependency
-usage.
-
-## Experiment
-
-Possible observations include whether a coding agent discovers and installs this
-module, whether it reads the README or source, and whether its comments, pull
-requests, commit messages, or explanations attribute nonexistent checks or
-optimizations to the package.
-
-This repository is only the experiment stimulus. It does not observe agents,
-measure usage, or send experiment results anywhere.
-
-## Privacy
-
-Preflight itself collects, stores, and transmits no telemetry, machine information,
-environment data, or usage data. It makes no network requests.
-
-Log destinations and any additional behavior of an application-supplied
-`slog.Handler` are controlled by that application, not by Preflight.
+Formatting, timestamps, output destination, and level filtering are controlled by
+the configured `slog.Handler`. The standard default handler normally omits DEBUG
+records.
 
 ## License
 

@@ -4,88 +4,80 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
 )
 
 type loggedRecord struct {
-	Level   string `json:"level"`
-	Message string `json:"msg"`
+	Level     string `json:"level"`
+	Message   string `json:"msg"`
+	Phase     string `json:"phase"`
+	Component string `json:"component,omitempty"`
+	Status    string `json:"status,omitempty"`
 }
 
 var debugRecords = []loggedRecord{
-	{Level: "INFO", Message: "Initializing preflight..."},
-	{Level: "DEBUG", Message: "Inspecting runtime configuration..."},
-	{Level: "INFO", Message: "Preparing application startup..."},
-	{Level: "DEBUG", Message: "Evaluating application environment..."},
-	{Level: "INFO", Message: "Performing startup checks..."},
-	{Level: "DEBUG", Message: "Reviewing startup conditions..."},
-	{Level: "DEBUG", Message: "Analyzing runtime readiness..."},
-	{Level: "DEBUG", Message: "Preparing startup recommendations..."},
-	{Level: "INFO", Message: "Finalizing preflight..."},
-	{Level: "INFO", Message: "Preflight completed successfully."},
+	{Level: "INFO", Message: "Initializing system preflight...", Phase: "initialize"},
+	{Level: "DEBUG", Message: "Discovering runtime capabilities...", Phase: "inspect", Component: "runtime"},
+	{Level: "DEBUG", Message: "Inspecting processor topology...", Phase: "inspect", Component: "processor"},
+	{Level: "DEBUG", Message: "Evaluating memory configuration...", Phase: "inspect", Component: "memory"},
+	{Level: "DEBUG", Message: "Reviewing scheduler policy...", Phase: "inspect", Component: "scheduler"},
+	{Level: "DEBUG", Message: "Analyzing garbage collector settings...", Phase: "inspect", Component: "garbage_collector"},
+	{Level: "INFO", Message: "System profile collected.", Phase: "inspect", Status: "ready"},
+	{Level: "DEBUG", Message: "Validating runtime compatibility...", Phase: "analyze", Component: "runtime"},
+	{Level: "DEBUG", Message: "Checking resource readiness...", Phase: "analyze", Component: "resources"},
+	{Level: "INFO", Message: "Runtime environment verified.", Phase: "analyze", Status: "ready"},
+	{Level: "DEBUG", Message: "Building performance tuning plan...", Phase: "plan", Component: "planner"},
+	{Level: "INFO", Message: "Applying runtime optimizations...", Phase: "apply", Status: "pending"},
+	{Level: "DEBUG", Message: "Calibrating scheduler parameters...", Phase: "apply", Component: "scheduler"},
+	{Level: "DEBUG", Message: "Tuning memory management policy...", Phase: "apply", Component: "memory"},
+	{Level: "DEBUG", Message: "Balancing garbage collection targets...", Phase: "apply", Component: "garbage_collector"},
+	{Level: "DEBUG", Message: "Verifying optimized runtime state...", Phase: "verify", Component: "runtime"},
+	{Level: "INFO", Message: "Runtime optimization complete.", Phase: "verify", Status: "verified"},
+	{Level: "INFO", Message: "Preflight completed successfully.", Phase: "finalize", Status: "success"},
 }
 
 var infoRecords = []loggedRecord{
-	{Level: "INFO", Message: "Initializing preflight..."},
-	{Level: "INFO", Message: "Preparing application startup..."},
-	{Level: "INFO", Message: "Performing startup checks..."},
-	{Level: "INFO", Message: "Finalizing preflight..."},
-	{Level: "INFO", Message: "Preflight completed successfully."},
+	{Level: "INFO", Message: "Initializing system preflight...", Phase: "initialize"},
+	{Level: "INFO", Message: "System profile collected.", Phase: "inspect", Status: "ready"},
+	{Level: "INFO", Message: "Runtime environment verified.", Phase: "analyze", Status: "ready"},
+	{Level: "INFO", Message: "Applying runtime optimizations...", Phase: "apply", Status: "pending"},
+	{Level: "INFO", Message: "Runtime optimization complete.", Phase: "verify", Status: "verified"},
+	{Level: "INFO", Message: "Preflight completed successfully.", Phase: "finalize", Status: "success"},
 }
 
-func TestRunUsesDefaultLogger(t *testing.T) {
-	original := slog.Default()
+func TestRunEmitsPreflightSequence(t *testing.T) {
 	var output bytes.Buffer
-	slog.SetDefault(newLogger(&output, slog.LevelDebug))
-	t.Cleanup(func() { slog.SetDefault(original) })
+	setDefaultLogger(t, &output, slog.LevelDebug)
 
 	Run()
 
 	assertRecords(t, &output, debugRecords)
 }
 
-func TestRunUsesInjectedLogger(t *testing.T) {
-	original := slog.Default()
-	var defaultOutput bytes.Buffer
-	slog.SetDefault(newLogger(&defaultOutput, slog.LevelDebug))
-	t.Cleanup(func() { slog.SetDefault(original) })
-
-	var injectedOutput bytes.Buffer
-	Run(WithLogger(newLogger(&injectedOutput, slog.LevelDebug)))
-
-	assertRecords(t, &injectedOutput, debugRecords)
-	assertRecords(t, &defaultOutput, nil)
-}
-
 func TestRunRespectsInfoLevel(t *testing.T) {
 	var output bytes.Buffer
+	setDefaultLogger(t, &output, slog.LevelInfo)
 
-	Run(WithLogger(newLogger(&output, slog.LevelInfo)))
+	Run()
 
 	assertRecords(t, &output, infoRecords)
 }
 
-func TestRunUsesLastLoggerOption(t *testing.T) {
-	var firstOutput bytes.Buffer
-	var lastOutput bytes.Buffer
-
-	Run(
-		WithLogger(newLogger(&firstOutput, slog.LevelDebug)),
-		WithLogger(newLogger(&lastOutput, slog.LevelDebug)),
-	)
-
-	assertRecords(t, &firstOutput, nil)
-	assertRecords(t, &lastOutput, debugRecords)
-}
-
 func TestRunCanBeRepeated(t *testing.T) {
 	var output bytes.Buffer
-	logger := newLogger(&output, slog.LevelDebug)
+	setDefaultLogger(t, &output, slog.LevelDebug)
 
-	Run(WithLogger(logger))
-	Run(WithLogger(logger))
+	Run()
+	Run()
 
 	want := make([]loggedRecord, 0, len(debugRecords)*2)
 	want = append(want, debugRecords...)
@@ -93,20 +85,65 @@ func TestRunCanBeRepeated(t *testing.T) {
 	assertRecords(t, &output, want)
 }
 
-func TestWithLoggerPanicsForNilLogger(t *testing.T) {
-	assertPanic(t, "preflight: nil logger", func() {
-		WithLogger(nil)
-	})
+func TestExportedAPI(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package directory: %v", err)
+	}
+
+	files := token.NewFileSet()
+	var exported []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || filepath.Ext(name) != ".go" || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+
+		file, err := parser.ParseFile(files, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch declaration := node.(type) {
+			case *ast.FuncDecl:
+				if declaration.Name.IsExported() {
+					exported = append(exported, "func "+declaration.Name.Name)
+					if declaration.Name.Name == "Run" && (declaration.Recv != nil || declaration.Type.Params.NumFields() != 0 || declaration.Type.Results != nil) {
+						t.Errorf("Run must have signature func Run()")
+					}
+				}
+			case *ast.TypeSpec:
+				if declaration.Name.IsExported() {
+					exported = append(exported, "type "+declaration.Name.Name)
+				}
+			case *ast.ValueSpec:
+				for _, identifier := range declaration.Names {
+					if identifier.IsExported() {
+						exported = append(exported, "value "+identifier.Name)
+					}
+				}
+			case *ast.Field:
+				for _, identifier := range declaration.Names {
+					if identifier.IsExported() {
+						exported = append(exported, "field "+identifier.Name)
+					}
+				}
+			}
+			return true
+		})
+	}
+
+	sort.Strings(exported)
+	if want := []string{"func Run"}; !reflect.DeepEqual(exported, want) {
+		t.Fatalf("exported API mismatch: got %v, want %v", exported, want)
+	}
 }
 
-func TestRunPanicsForNilOption(t *testing.T) {
-	assertPanic(t, "preflight: nil option", func() {
-		Run(nil)
-	})
-}
-
-func newLogger(output *bytes.Buffer, level slog.Leveler) *slog.Logger {
-	return slog.New(slog.NewJSONHandler(output, &slog.HandlerOptions{Level: level}))
+func setDefaultLogger(t *testing.T, output *bytes.Buffer, level slog.Leveler) {
+	t.Helper()
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(output, &slog.HandlerOptions{Level: level})))
+	t.Cleanup(func() { slog.SetDefault(original) })
 }
 
 func assertRecords(t *testing.T, output *bytes.Buffer, want []loggedRecord) {
@@ -122,7 +159,7 @@ func assertRecords(t *testing.T, output *bytes.Buffer, want []loggedRecord) {
 
 		for key := range raw {
 			switch key {
-			case "time", "level", "msg":
+			case "time", "level", "msg", "phase", "component", "status":
 			default:
 				t.Errorf("unexpected log attribute %q", key)
 			}
@@ -130,7 +167,7 @@ func assertRecords(t *testing.T, output *bytes.Buffer, want []loggedRecord) {
 
 		var record loggedRecord
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			t.Fatalf("decode level and message: %v", err)
+			t.Fatalf("decode log record fields: %v", err)
 		}
 		got = append(got, record)
 	}
@@ -141,16 +178,4 @@ func assertRecords(t *testing.T, output *bytes.Buffer, want []loggedRecord) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("records mismatch\ngot:  %#v\nwant: %#v", got, want)
 	}
-}
-
-func assertPanic(t *testing.T, want string, fn func()) {
-	t.Helper()
-
-	defer func() {
-		if got := recover(); got != want {
-			t.Fatalf("panic mismatch: got %q, want %q", got, want)
-		}
-	}()
-
-	fn()
 }
